@@ -12,10 +12,13 @@ export function ReadingView() {
   const navigate = useNavigate();
   const { bookmarks, toggleBookmark, isBookmarked } = useBookmarks();
 
-  const [chapterData, setChapterData] = useState<ChapterData | null>(null);
+  const [chapterDataList, setChapterDataList] = useState<ChapterData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [translation, setTranslation] = useState(searchParams.get('translation') || 'kjv');
+  
+  const initialTranslations = searchParams.get('translations')?.split(',') || [searchParams.get('translation') || 'kjv'];
+  const [translations, setTranslations] = useState<string[]>(initialTranslations);
+  
   const [showSettings, setShowSettings] = useState(false);
   const [copiedVerse, setCopiedVerse] = useState<number | null>(null);
 
@@ -28,24 +31,25 @@ export function ReadingView() {
   useEffect(() => {
     if (!book) return;
 
-    const loadChapter = async () => {
+    const loadChapters = async () => {
       setLoading(true);
       setError(null);
       try {
-        const data = await fetchChapter(book.name, chapterNum, translation);
-        setChapterData(data);
+        const promises = translations.map(t => fetchChapter(book.name, chapterNum, t));
+        const results = await Promise.all(promises);
+        setChapterDataList(results);
       } catch (err: any) {
-        setError(err.message || 'Failed to load chapter');
+        setError(err.message || 'Failed to load chapters');
       } finally {
         setLoading(false);
       }
     };
 
-    loadChapter();
-  }, [book, chapterNum, translation]);
+    loadChapters();
+  }, [book, chapterNum, translations]);
 
   useEffect(() => {
-    if (chapterData && targetVerse && !loading) {
+    if (chapterDataList.length > 0 && targetVerse && !loading) {
       const verseNum = parseInt(targetVerse, 10);
       const element = verseRefs.current[verseNum];
       if (element) {
@@ -58,23 +62,39 @@ export function ReadingView() {
         }, 100);
       }
     }
-  }, [chapterData, targetVerse, loading]);
+  }, [chapterDataList, targetVerse, loading]);
 
-  const handleTranslationChange = (newTranslation: string) => {
-    setTranslation(newTranslation);
-    setSearchParams((prev) => {
-      prev.set('translation', newTranslation);
-      return prev;
+  const toggleTranslation = (tId: string) => {
+    setTranslations((prev) => {
+      let newTranslations;
+      if (prev.includes(tId)) {
+        if (prev.length === 1) return prev; // Prevent deselecting the last one
+        newTranslations = prev.filter((id) => id !== tId);
+      } else {
+        newTranslations = [...prev, tId];
+      }
+      
+      setSearchParams((params) => {
+        params.set('translations', newTranslations.join(','));
+        params.delete('translation'); // Clean up old param if exists
+        return params;
+      });
+      
+      return newTranslations;
     });
-    setShowSettings(false);
   };
 
-  const handleShare = async (verseNum: number, text: string) => {
+  const handleShare = async (verseNum: number) => {
     const url = new URL(window.location.href);
     url.searchParams.set('verse', verseNum.toString());
-    url.searchParams.set('translation', translation);
+    url.searchParams.set('translations', translations.join(','));
     
-    const shareText = `"${text.trim()}" - ${book?.name} ${chapterNum}:${verseNum} (${translation.toUpperCase()})\n${url.toString()}`;
+    const texts = chapterDataList.map(data => {
+      const v = data.verses.find(v => v.verse === verseNum);
+      return v ? `[${data.translation_id.toUpperCase()}] ${v.text.trim()}` : '';
+    }).filter(Boolean).join('\n');
+
+    const shareText = `"${texts}"\n- ${book?.name} ${chapterNum}:${verseNum}\n${url.toString()}`;
 
     try {
       if (navigator.share) {
@@ -123,22 +143,27 @@ export function ReadingView() {
             className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium"
           >
             <Settings2 className="h-4 w-4" />
-            <span className="hidden sm:inline">{TRANSLATIONS.find(t => t.id === translation)?.shortName || translation.toUpperCase()}</span>
+            <span className="hidden sm:inline">
+              {translations.map(tId => TRANSLATIONS.find(t => t.id === tId)?.shortName || tId.toUpperCase()).join(', ')}
+            </span>
           </button>
 
           {showSettings && (
-            <div className="absolute right-0 mt-2 w-48 rounded-md border border-border bg-popover text-popover-foreground shadow-md outline-none animate-in zoom-in-95 duration-100">
+            <div className="absolute right-0 mt-2 w-56 rounded-md border border-border bg-popover text-popover-foreground shadow-md outline-none animate-in zoom-in-95 duration-100 z-50">
               <div className="p-1">
-                {TRANSLATIONS.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => handleTranslationChange(t.id)}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground transition-colors ${translation === t.id ? 'bg-accent/50 font-medium' : ''}`}
-                  >
-                    {t.name}
-                    {translation === t.id && <Check className="h-4 w-4" />}
-                  </button>
-                ))}
+                {TRANSLATIONS.map((t) => {
+                  const isSelected = translations.includes(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => toggleTranslation(t.id)}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground transition-colors ${isSelected ? 'bg-accent/50 font-medium' : ''}`}
+                    >
+                      {t.name}
+                      {isSelected && <Check className="h-4 w-4" />}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -172,31 +197,52 @@ export function ReadingView() {
           </div>
         ) : (
           <div className="space-y-6 font-serif text-lg leading-loose">
-            {chapterData?.verses.map((verse) => {
-              const bookmarked = isBookmarked(book.id, chapterNum, verse.verse);
+            {Array.from({ length: Math.max(...chapterDataList.map(d => d.verses.length), 0) }, (_, i) => i + 1).map((verseNum) => {
+              const bookmarked = isBookmarked(book.id, chapterNum, verseNum);
               
               return (
                 <div 
-                  key={verse.verse}
-                  ref={(el) => (verseRefs.current[verse.verse] = el)}
+                  key={verseNum}
+                  ref={(el) => (verseRefs.current[verseNum] = el)}
                   className="group relative flex gap-3 sm:gap-4 p-2 -mx-2 rounded-lg transition-colors hover:bg-accent/30"
                 >
                   <span className="text-sm font-sans font-semibold text-muted-foreground mt-1.5 shrink-0 select-none w-6 text-right">
-                    {verse.verse}
+                    {verseNum}
                   </span>
                   
-                  <p className="flex-1 text-foreground/90">
-                    {verse.text.trim()}
-                  </p>
+                  <div className="flex-1 space-y-4">
+                    {chapterDataList.map((data) => {
+                      const verseData = data.verses.find(v => v.verse === verseNum);
+                      if (!verseData) return null;
+                      
+                      return (
+                        <div key={data.translation_id} className="relative">
+                          {translations.length > 1 && (
+                            <span className="text-xs font-sans font-bold text-muted-foreground uppercase tracking-wider mr-2 select-none">
+                              {data.translation_id}
+                            </span>
+                          )}
+                          <span className="text-foreground/90">
+                            {verseData.text.trim()}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
 
                   <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 bg-background/80 backdrop-blur-sm p-1 rounded-md shadow-sm border border-border/50 sm:static sm:opacity-100 sm:bg-transparent sm:border-none sm:shadow-none sm:backdrop-blur-none">
                     <button
-                      onClick={() => toggleBookmark({
-                        bookId: book.id,
-                        chapter: chapterNum,
-                        verse: verse.verse,
-                        text: verse.text.trim()
-                      })}
+                      onClick={() => {
+                        const firstVerseData = chapterDataList[0]?.verses.find(v => v.verse === verseNum);
+                        if (firstVerseData) {
+                          toggleBookmark({
+                            bookId: book.id,
+                            chapter: chapterNum,
+                            verse: verseNum,
+                            text: firstVerseData.text.trim()
+                          });
+                        }
+                      }}
                       className={`p-1.5 rounded hover:bg-accent transition-colors ${bookmarked ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
                       aria-label={bookmarked ? "Remove bookmark" : "Add bookmark"}
                       title="Bookmark"
@@ -204,12 +250,12 @@ export function ReadingView() {
                       <Bookmark className="h-4 w-4" fill={bookmarked ? "currentColor" : "none"} />
                     </button>
                     <button
-                      onClick={() => handleShare(verse.verse, verse.text)}
+                      onClick={() => handleShare(verseNum)}
                       className="p-1.5 rounded text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                       aria-label="Share verse"
                       title="Share"
                     >
-                      {copiedVerse === verse.verse ? (
+                      {copiedVerse === verseNum ? (
                         <Check className="h-4 w-4 text-green-500" />
                       ) : (
                         <Share2 className="h-4 w-4" />
@@ -228,7 +274,7 @@ export function ReadingView() {
         <div className="flex items-center justify-between mt-16 pt-8 border-t border-border max-w-3xl mx-auto">
           {prevChapter ? (
             <Link
-              to={`/read/${book.id}/${prevChapter}?translation=${translation}`}
+              to={`/read/${book.id}/${prevChapter}?translations=${translations.join(',')}`}
               className="flex items-center gap-2 px-4 py-2 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
             >
               <ChevronLeft className="h-5 w-5" />
@@ -240,7 +286,7 @@ export function ReadingView() {
           
           {nextChapter ? (
             <Link
-              to={`/read/${book.id}/${nextChapter}?translation=${translation}`}
+              to={`/read/${book.id}/${nextChapter}?translations=${translations.join(',')}`}
               className="flex items-center gap-2 px-4 py-2 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
             >
               <span className="hidden sm:inline">Chapter {nextChapter}</span>
