@@ -3,6 +3,8 @@ import { Book, Translation } from './types';
 export const TRANSLATIONS: Translation[] = [
   { id: 'kjv', name: 'King James Version', shortName: 'KJV' },
   { id: 'web', name: 'World English Bible', shortName: 'WEB' },
+  { id: 'esv', name: 'English Standard Version', shortName: 'ESV' },
+  { id: 'nasb', name: 'New American Standard Bible', shortName: 'NASB' },
   { id: 'bbe', name: 'Bible in Basic English', shortName: 'BBE' },
   { id: 'almeida', name: 'João Ferreira de Almeida', shortName: 'JFA' },
   { id: 'clementine', name: 'Clementine Vulgate', shortName: 'VUL' },
